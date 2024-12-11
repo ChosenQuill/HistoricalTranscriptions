@@ -1,0 +1,64 @@
+PAGE 1
+```
+YEAR(S)	1811 – 1834.
+Sheet 1.
+
+Box		Field		Name	Date
+___________________________________________________________________
+
+Sierra Leone				
+Box 1. File 2.				
+1820 – 1822.
+
+1	Sierra Leone	J. Baker	29th March 1820.
+2	Sierra Leone	J. Baker	26th May 1820.
+3	General Census of the Colony of Sierra Leone		8th July 1820.
+4	Sierra Leone	J. Baker	8th July 1820.
+5	General Census of the Colony of Sierra Leone		9th July 1820.
+6	Sierra Leone	J. Baker	24th July 1820.
+7	Sierra Leone	J. Baker	2nd August 1820.
+8	Sierra Leone	J. Baker	5th August 1820.
+9	Inventory of Rev. J. Gilkinson's Effects at Liverpool		J. Haddleton	9th August 1820.
+10	Sierra Leone	J. Baker	10th September 1820.
+11	Sierra Leone	J. Haddleton	10th November 1820.
+12	Sierra Leone	J. Haddleton	25th November 1820.
+13	Sierra Leone	J. Haddleton	12th January 1821.
+14	Sierra Leone	J. Haddleton	24th January 1821.
+15	Sierra Leone	J. Haddleton	29th January 1821.
+16	Sierra Leone	J. Hook	2nd February 1821.
+17	Sierra Leone	J. Haddleton	23rd February 1821.
+18	Sierra Leone	J. Haddleton	12th March 1821.
+19	Sierra Leone	J. Haddleton	19th March 1821.
+20	Sierra Leone	J. Haddleton	24th March 1821.
+21	Sierra Leone	J. Haddleton	19th April 1821.
+22	Sierra Leone	J. Haddleton	11th May 1821.
+23	Sierra Leone	G. Lane	11th June 1821.
+24	Sierra Leone	G. Lane	11th June 1821.
+25	Sierra Leone	J. Haddleton	11th June 1821.
+26	Sierra Leone	J. Haddleton	8th June 1821.
+27	Sierra Leone **	J. Haddleton	8th June 1821.
+28	Extracts of G. Lane's Journal from June to November 1821.		
+29	Sierra Leone	G. Lane	12th July 1821.
+30	Sierra Leone	G. Lane	13th October 1821.
+31	Deed of Covenant relative to Chapel at Sierra Leone. 1821.	G. Lane	
+32	Copy of a memorial presented by missionaries to Sir C. MacCarthy	16th January 1822.
+33	Sierra Leone	J. Baker	31st January 1822.
+34	Sierra Leone	J. Haddleton	1st February 1822.
+35	Sierra Leone	J. Haddleton	1st February 1822.
+36	Sierra Leone	J. Haddleton	24th February 1822.
+37	Sierra Leone	J. Haddleton	25th February 1822.
+38	Sierra Leone	J. Haddleton	18th March 1822.
+39	Sierra Leone	J. Haddleton	28th March 1822.
+40	Sierra Leone	J. Haddleton	2nd March 1822.
+41	Sierra Leone	J. Haddleton	24th March 1822.
+42	Sierra Leone	J. Haddleton	2nd May 1822.
+43	Sierra Leone	J. Lane	From 14th to 28th Feb. 17th 1822, 2nd April 1822.
+44	Extract of Journal of G. Lane from Nov. 11th 1821 – January 1822.	J. Baker	
+45	Sierra Leone	J. Haddleton	1st April 1822.
+46	Sierra Leone	J. Haddleton	10th April 1822.
+47	Continuation of J. Haddleton's Journal		J. Haddleton	2nd May 1822.
+48	Sierra Leone	J. Haddleton	2nd May 1822.
+49	Continuation of J. Haddleton's Journal.		
+50	Sierra Leone	G. Gabidden	3rd August 1822.
+```
+
