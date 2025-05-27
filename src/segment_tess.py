@@ -1,4 +1,4 @@
-# Experimental proof of concept script where we try using pytesseract to create segments, not used in final application. Uses terreract v5. 
+# Experimental proof of concept script where we try using pytesseract to create segments, not used in final application as fairly buggy. Uses terreract v5. 
 
 import os
 import glob

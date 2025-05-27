@@ -1,14 +1,16 @@
 import os
-import json
 import base64
 import requests
 from pathlib import Path
 from typing import List, Tuple
 from collections import defaultdict
 import re
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # CONFIGURATION VARIABLES
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 MODEL_NAME = "gpt-4o"
 EXPORT_FOLDER = Path("export")
 TRANSCRIPTS_FOLDER = Path("transcripts")

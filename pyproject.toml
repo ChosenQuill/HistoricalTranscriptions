@@ -17,7 +17,12 @@ layoutparser = "^0.3.4"
 opencv-python = "^4.10.0.84"
 pymupdf = "^1.25.0"
 requests = "^2.32.3"
+python-dotenv = "^1.0.1"
 
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
+matplotlib = "^3.10.0"
 
 [build-system]
 requires = ["poetry-core"]
