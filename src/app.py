@@ -12,14 +12,114 @@ import tkinter as tk
 from tkinter import messagebox
 import numpy as np
 import cv2
+import tkinter.filedialog as fd
+import json
+import base64
+import requests
+import re
+from pathlib import Path
+from collections import defaultdict
+from typing import List
 
+class ProjectManager:
+    def __init__(self):
+        self.project_path = None
+        self.project_data = None
+        self.project_json_path = None
+
+    def new_project(self, parent):
+        project_dir = fd.askdirectory(title="Select Project Directory", parent=parent)
+        if not project_dir:
+            return False
+        pdf_files = fd.askopenfilenames(title="Select PDF Files for Project", filetypes=[("PDF Files", "*.pdf")], parent=parent)
+        if not pdf_files:
+            return False
+        # Copy PDFs into project folder
+        pdfs_dir = os.path.join(project_dir, "pdfs")
+        os.makedirs(pdfs_dir, exist_ok=True)
+        pdf_names = []
+        for pdf in pdf_files:
+            base = os.path.basename(pdf)
+            dest = os.path.join(pdfs_dir, base)
+            if not os.path.exists(dest):
+                with open(pdf, "rb") as fsrc, open(dest, "wb") as fdst:
+                    fdst.write(fsrc.read())
+            pdf_names.append(base)
+        # Create segments and transcripts folders
+        os.makedirs(os.path.join(project_dir, "segments"), exist_ok=True)
+        os.makedirs(os.path.join(project_dir, "transcripts"), exist_ok=True)
+        # Create project.json
+        self.project_json_path = os.path.join(project_dir, "project.json")
+        self.project_data = {
+            "pdfs": pdf_names,
+            "segments": {},
+            "transcripts": {},
+        }
+        with open(self.project_json_path, "w") as f:
+            json.dump(self.project_data, f, indent=2)
+        self.project_path = project_dir
+        return True
+
+    def open_project(self, parent):
+        project_dir = fd.askdirectory(title="Open Project Directory", parent=parent)
+        if not project_dir:
+            return False
+        project_json = os.path.join(project_dir, "project.json")
+        if not os.path.exists(project_json):
+            tk.messagebox.showerror("Error", "No project.json found in selected directory.")
+            return False
+        with open(project_json, "r") as f:
+            self.project_data = json.load(f)
+        self.project_path = project_dir
+        self.project_json_path = project_json
+        return True
+
+    def save_project(self):
+        if self.project_json_path and self.project_data:
+            with open(self.project_json_path, "w") as f:
+                json.dump(self.project_data, f, indent=2)
+
+class StartWindow(tk.Toplevel):
+    def __init__(self, master, on_project_selected):
+        super().__init__(master)
+        self.title("Start Project")
+        self.geometry("400x200")
+        self.on_project_selected = on_project_selected
+        self.pm = ProjectManager()
+        label = tk.Label(self, text="Welcome! Start a new project or open an existing one.")
+        label.pack(pady=20)
+        btn_new = tk.Button(self, text="New Project", command=self.new_project)
+        btn_new.pack(pady=10)
+        btn_open = tk.Button(self, text="Open Project", command=self.open_project)
+        btn_open.pack(pady=10)
+
+    def new_project(self):
+        if self.pm.new_project(self):
+            self.on_project_selected(self.pm)
+            self.destroy()
+
+    def open_project(self):
+        if self.pm.open_project(self):
+            self.on_project_selected(self.pm)
+            self.destroy()
+
+# Refactor App to use StartWindow and ProjectManager
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-
+        ctk.set_appearance_mode("dark")
         self.title("Historical Document Segmenter")
         self.geometry("1200x900")
+        self.project_manager = None
+        self.wait_visibility()
+        self.withdraw()
+        def on_project_selected(pm):
+            self.project_manager = pm
+            self.deiconify()
+            self.init_main_ui()
+        StartWindow(self, on_project_selected)
 
+    def init_main_ui(self):
         self.storage_data = load_storage()
 
         self.pdf_manager = PDFManager()
@@ -40,6 +140,18 @@ class App(ctk.CTk):
         self.current_tkimage = None
 
         self.click_points = []
+
+        # ---- PROJECT MENU FRAME (replaces tk.Menu) ----
+        menu_frame = ctk.CTkFrame(self)
+        menu_frame.pack(side="top", fill="x", pady=0)
+        self.menu_new_btn = ctk.CTkButton(menu_frame, text="New Project", command=self.menu_new_project, width=120)
+        self.menu_new_btn.pack(side="left", padx=5, pady=2)
+        self.menu_open_btn = ctk.CTkButton(menu_frame, text="Open Project", command=self.menu_open_project, width=120)
+        self.menu_open_btn.pack(side="left", padx=5, pady=2)
+        self.menu_save_btn = ctk.CTkButton(menu_frame, text="Save Project", command=self.menu_save_project, width=120)
+        self.menu_save_btn.pack(side="left", padx=5, pady=2)
+        self.menu_exit_btn = ctk.CTkButton(menu_frame, text="Exit", command=self.quit, width=80)
+        self.menu_exit_btn.pack(side="left", padx=5, pady=2)
 
         # ---- TOP FRAME ----
         top_frame = ctk.CTkFrame(self)
@@ -91,10 +203,40 @@ class App(ctk.CTk):
         self.add_scan_page_btn = ctk.CTkButton(top_btn_frame, text="Add Scan Page (Alt)", command=self.add_scan_page)
         self.add_scan_page_btn.pack(side="left", padx=5)
 
-        # ---- CANVAS ----
-        self.canvas = tk.Canvas(self, bg="gray", width=1000, height=700)
-        self.canvas.pack(expand=True, fill="both")
+        # Add transcription button
+        self.transcribe_btn = ctk.CTkButton(top_btn_frame, text="Transcribe Segments (T)", command=self.transcribe_segments)
+        self.transcribe_btn.pack(side="left", padx=5)
+
+        # ---- MAIN CONTENT FRAME ----
+        main_frame = ctk.CTkFrame(self)
+        main_frame.pack(side="top", fill="both", expand=True, pady=5)
+
+        # Left side - Canvas
+        canvas_frame = ctk.CTkFrame(main_frame)
+        canvas_frame.pack(side="left", fill="both", expand=True, padx=5)
+
+        self.canvas = ctk.CTkCanvas(canvas_frame, bg="#222222", width=1000, height=700, highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda e: self.update_canvas_image())
+
+        # Right side - Transcription display
+        transcription_frame = ctk.CTkFrame(main_frame)
+        transcription_frame.pack(side="right", fill="both", expand=True, padx=5)
+
+        # Transcription header
+        transcription_header = ctk.CTkLabel(transcription_frame, text="Transcription Results", font=("Arial", 16, "bold"))
+        transcription_header.pack(pady=10)
+
+        # Transcription text area with scrollbar
+        transcription_text_frame = ctk.CTkFrame(transcription_frame)
+        transcription_text_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        self.transcription_text = tk.Text(transcription_text_frame, wrap=tk.WORD, bg="gray20", fg="white", font=("Arial", 12))
+        self.transcription_text.pack(side="left", fill="both", expand=True)
+
+        transcription_scrollbar = ctk.CTkScrollbar(transcription_text_frame, command=self.transcription_text.yview)
+        transcription_scrollbar.pack(side="right", fill="y")
+        self.transcription_text.configure(yscrollcommand=transcription_scrollbar.set)
 
         # ---- BOTTOM FRAME ----
         bottom_frame = ctk.CTkFrame(self)
@@ -165,6 +307,9 @@ class App(ctk.CTk):
         self.bind_all('<E>', lambda e: self.export_segments_only())
         self.bind_all('<r>', lambda e: self.export_and_next())
         self.bind_all('<R>', lambda e: self.export_and_next())
+
+        # Add transcription shortcut
+        self.bind_all('<t>', lambda e: self.transcribe_segments())
 
     def load_page_image(self):
         page = self.pdf_manager.get_current_page()
@@ -659,8 +804,6 @@ class App(ctk.CTk):
                 self.rotation_angle = 0.0
                 self.update_rotation_scale()
                 self.load_page_image()
-                messagebox.showinfo("Info", "Page exported successfully. Proceeding to next PDF page.")
-            else:
                 messagebox.showinfo("Info", "Page exported successfully. No more PDFs/pages available.")
 
     def export_segment(self, points, out_path):
@@ -767,3 +910,196 @@ class App(ctk.CTk):
 
         self.storage_data["pdfs"][pdf_hash] = pdf_entry
         save_storage(self.storage_data)
+
+    def menu_new_project(self):
+        if messagebox.askyesno("New Project", "Are you sure you want to start a new project? Unsaved changes will be lost."):
+            def on_project_selected(pm):
+                self.project_manager = pm
+                self.init_main_ui()
+            StartWindow(self, on_project_selected)
+
+    def menu_open_project(self):
+        if messagebox.askyesno("Open Project", "Are you sure you want to open a different project? Unsaved changes will be lost."):
+            def on_project_selected(pm):
+                self.project_manager = pm
+                self.init_main_ui()
+            StartWindow(self, on_project_selected)
+
+    def menu_save_project(self):
+        if self.project_manager:
+            self.project_manager.save_project()
+            messagebox.showinfo("Save Project", "Project saved successfully.")
+
+    def transcribe_segments(self):
+        """Transcribe the current page's segments and display the results."""
+        if not self.current_scan_page_number:
+            messagebox.showwarning("Warning", "No scan page selected.")
+            return
+
+        # Get the current page's segments
+        segments = self.segment_manager.get_segments_by_scan_page(self.current_scan_page_number)
+        if not segments:
+            messagebox.showwarning("Warning", "No segments to transcribe.")
+            return
+
+        # Create a temporary directory for the segments
+        temp_dir = os.path.join(self.project_manager.project_path, "temp_segments")
+        os.makedirs(temp_dir, exist_ok=True)
+
+        try:
+            # Export segments to temporary directory
+            segment_images = []
+            for i, segment in enumerate(segments):
+                points = self.get_rotated_points(segment["original_points"])
+                img_path = os.path.join(temp_dir, f"segment_{i}.png")
+                self.export_segment(points, img_path)
+                segment_images.append(img_path)
+
+            # Build the prompt context
+            pdfname = os.path.splitext(os.path.basename(self.pdf_manager.get_current_pdf_path()))[0]
+            current_page = self.pdf_manager.get_current_page_index() + 1
+            messages = self.build_prompt_context(pdfname, current_page, segment_images)
+
+            # Call the API
+            self.transcription_text.delete(1.0, tk.END)
+            self.transcription_text.insert(tk.END, "Transcribing... Please wait...\n")
+            self.update()
+
+            transcript = self.call_api(messages)
+
+            # Display the results
+            self.transcription_text.delete(1.0, tk.END)
+            self.transcription_text.insert(tk.END, transcript)
+
+            # Save the transcript
+            transcript_dir = os.path.join(self.project_manager.project_path, "transcripts")
+            os.makedirs(transcript_dir, exist_ok=True)
+            transcript_file = os.path.join(transcript_dir, f"{pdfname}.txt")
+            
+            with open(transcript_file, "a", encoding="utf-8") as f:
+                f.write(f"PAGE {current_page}\n")
+                f.write(transcript.strip() + "\n\n")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Transcription failed: {str(e)}")
+        finally:
+            # Clean up temporary directory
+            if os.path.exists(temp_dir):
+                for file in os.listdir(temp_dir):
+                    os.remove(os.path.join(temp_dir, file))
+                os.rmdir(temp_dir)
+
+    def build_prompt_context(self, pdfname: str, current_page: int, segment_images: List[str]) -> List[dict]:
+        """Build the prompt context for the transcription API."""
+        # Get previous transcripts
+        transcript_dir = os.path.join(self.project_manager.project_path, "transcripts")
+        transcript_file = os.path.join(transcript_dir, f"{pdfname}.txt")
+        
+        prev_transcripts = []
+        if os.path.exists(transcript_file):
+            with open(transcript_file, "r", encoding="utf-8") as f:
+                lines = f.read().splitlines()
+                
+            page_transcripts = {}
+            current_page_number = None
+            current_page_lines = []
+            
+            for line in lines:
+                if line.startswith("PAGE "):
+                    if current_page_number is not None:
+                        page_transcripts[current_page_number] = "\n".join(current_page_lines)
+                    try:
+                        current_page_number = int(line.strip().split(" ")[1])
+                    except (ValueError, IndexError):
+                        current_page_number = None
+                    current_page_lines = []
+                else:
+                    if current_page_number is not None:
+                        current_page_lines.append(line)
+            
+            if current_page_number is not None:
+                page_transcripts[current_page_number] = "\n".join(current_page_lines)
+            
+            previous_pages = [p for p in page_transcripts.keys() if p < current_page]
+            previous_pages.sort(reverse=True)
+            last_3_pages = previous_pages[:3]
+            
+            last_3_pages.sort()
+            for p in last_3_pages:
+                prev_transcripts.append(f"Previous PAGE {p}:\n{page_transcripts[p]}")
+
+        context_block = "\n\n".join(prev_transcripts) if prev_transcripts else "No previous context available."
+
+        # Prepare image items
+        image_items = []
+        for img_path in segment_images:
+            with open(img_path, "rb") as img_file:
+                base64_str = base64.b64encode(img_file.read()).decode("utf-8")
+            image_items.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{base64_str}"
+                }
+            })
+
+        # Build messages
+        system_msg = {
+            "role": "system",
+            "content": (
+                "You are a helpful assistant tasked with transcribing historical documents. "
+                "You must accurately extract all textual content from the provided image segments. "
+                "These images are scans of historical documents and may contain faded ink, unusual fonts, or damage. "
+                "Use the provided previous pages' transcripts as context if it helps you interpret unclear text. "
+                "However, DO NOT HALLUCINATE. If something is unreadable, mark it as [unreadable]. "
+                "Preserve line breaks if meaningful. "
+                "DO NOT ADD EXTRANEOUS COMMENTARY, ONLY OUTPUT THE RAW TRANSCRIPTION TEXT. "
+                "Do not add page headers in your final output. Your goal: produce the most accurate transcription."
+            )
+        }
+
+        user_msg_content = [
+            {
+                "type": "text",
+                "text": (
+                    "Below are historical document segments. Transcribe them as accurately as possible. "
+                    "DO NOT ADD EXTRA OUTPUT, ONLY OUTPUT THE RAW TRANSCRIPTION TEXT ALONE."
+                    "Use the previous pages' context to help interpret unclear words if possible.\n\n"
+                    f"Previous context for {pdfname}, up to the last 3 pages before page {current_page}:\n"
+                    f"{context_block}\n\n"
+                    "Now here are the images to transcribe:"
+                )
+            }
+        ]
+        user_msg_content.extend(image_items)
+
+        user_msg = {
+            "role": "user",
+            "content": user_msg_content
+        }
+
+        return [system_msg, user_msg]
+
+    def call_api(self, messages: List[dict]) -> str:
+        """Call the OpenAI API for transcription."""
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"
+        }
+        payload = {
+            "model": MODEL_NAME,
+            "messages": messages,
+            "temperature": 1,
+            "top_p": 1.0,
+            "max_tokens": 2000
+        }
+
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code != 200:
+            raise RuntimeError(f"API request failed with status code {response.status_code}: {response.text}")
+
+        resp_json = response.json()
+        choices = resp_json.get("choices", [])
+        if not choices:
+            raise RuntimeError("No choices returned from API.")
+        return choices[0]["message"]["content"].strip()
