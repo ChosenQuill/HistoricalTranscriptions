@@ -12,7 +12,7 @@ import tkinter as tk
 from tkinter import messagebox
 import numpy as np
 import cv2
-import tkinter.filedialog as fd
+from customtkinter import filedialog as fd
 import json
 import base64
 import requests
@@ -20,6 +20,7 @@ import re
 from pathlib import Path
 from collections import defaultdict
 from typing import List
+import threading
 
 class ProjectManager:
     def __init__(self):
@@ -79,35 +80,97 @@ class ProjectManager:
             with open(self.project_json_path, "w") as f:
                 json.dump(self.project_data, f, indent=2)
 
-class StartWindow(tk.Toplevel):
+    def new_project_with_paths(self, parent, project_dir, pdf_files):
+        if not project_dir or not pdf_files:
+            return False
+        pdfs_dir = os.path.join(project_dir, "pdfs")
+        os.makedirs(pdfs_dir, exist_ok=True)
+        pdf_names = []
+        for pdf in pdf_files:
+            base = os.path.basename(pdf)
+            dest = os.path.join(pdfs_dir, base)
+            if not os.path.exists(dest):
+                with open(pdf, "rb") as fsrc, open(dest, "wb") as fdst:
+                    fdst.write(fsrc.read())
+            pdf_names.append(base)
+        os.makedirs(os.path.join(project_dir, "segments"), exist_ok=True)
+        os.makedirs(os.path.join(project_dir, "transcripts"), exist_ok=True)
+        self.project_json_path = os.path.join(project_dir, "project.json")
+        self.project_data = {
+            "pdfs": pdf_names,
+            "segments": {},
+            "transcripts": {},
+        }
+        with open(self.project_json_path, "w") as f:
+            json.dump(self.project_data, f, indent=2)
+        self.project_path = project_dir
+        return True
+
+    def open_project_with_path(self, parent, project_dir):
+        project_json = os.path.join(project_dir, "project.json")
+        if not os.path.exists(project_json):
+            tk.messagebox.showerror("Error", "No project.json found in selected directory.")
+            return False
+        with open(project_json, "r") as f:
+            self.project_data = json.load(f)
+        self.project_path = project_dir
+        self.project_json_path = project_json
+        return True
+
+class StartWindow(ctk.CTkToplevel):
     def __init__(self, master, on_project_selected):
         super().__init__(master)
         self.title("Start Project")
-        self.geometry("400x200")
+        self.geometry("400x220")
         self.on_project_selected = on_project_selected
         self.pm = ProjectManager()
-        label = tk.Label(self, text="Welcome! Start a new project or open an existing one.")
-        label.pack(pady=20)
-        btn_new = tk.Button(self, text="New Project", command=self.new_project)
+        self.configure(bg="#181a1b")
+        # Load icons for start window
+        icon_dir = os.path.join(os.path.dirname(__file__), "icons")
+        self.icon_new = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "new.png")), size=(24, 24))
+        self.icon_open = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "open.png")), size=(24, 24))
+        label = ctk.CTkLabel(self, text="Welcome! Start a new project or open an existing one.", font=("Arial", 16, "bold"))
+        label.pack(pady=24)
+        btn_new = ctk.CTkButton(self, image=self.icon_new, text="New Project", compound="left", command=self.new_project, width=180, font=("Arial", 14, "bold"))
         btn_new.pack(pady=10)
-        btn_open = tk.Button(self, text="Open Project", command=self.open_project)
+        btn_open = ctk.CTkButton(self, image=self.icon_open, text="Open Project", compound="left", command=self.open_project, width=180, font=("Arial", 14, "bold"))
         btn_open.pack(pady=10)
 
     def new_project(self):
-        if self.pm.new_project(self):
+        # Use a custom ctk dialog for folder selection if possible
+        project_dir = self.ask_directory("Select Project Directory")
+        if not project_dir:
+            return False
+        pdf_files = self.ask_open_files("Select PDF Files for Project", filetypes=[("PDF Files", "*.pdf")])
+        if not pdf_files:
+            return False
+        if self.pm.new_project_with_paths(self, project_dir, pdf_files):
             self.on_project_selected(self.pm)
             self.destroy()
 
     def open_project(self):
-        if self.pm.open_project(self):
+        project_dir = self.ask_directory("Open Project Directory")
+        if not project_dir:
+            return False
+        if self.pm.open_project_with_path(self, project_dir):
             self.on_project_selected(self.pm)
             self.destroy()
+
+    def ask_directory(self, title):
+        # CustomTkinter does not have a native directory picker, so fallback to tk.filedialog but theme the parent
+        import tkinter.filedialog as fd
+        return fd.askdirectory(title=title, parent=self)
+
+    def ask_open_files(self, title, filetypes):
+        import tkinter.filedialog as fd
+        return fd.askopenfilenames(title=title, filetypes=filetypes, parent=self)
 
 # Refactor App to use StartWindow and ProjectManager
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("dark-blue")
         self.title("Historical Document Segmenter")
         self.geometry("1200x900")
         self.project_manager = None
@@ -141,136 +204,179 @@ class App(ctk.CTk):
 
         self.click_points = []
 
+        self.minsize(1200, 900)
+
+        # Load icons
+        icon_dir = os.path.join(os.path.dirname(__file__), "icons")
+        self.icon_new = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "new.png")), size=(24, 24))
+        self.icon_open = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "open.png")), size=(24, 24))
+        self.icon_save = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "save.png")), size=(24, 24))
+        self.icon_exit = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "exit.png")), size=(24, 24))
+        self.icon_remove = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "remove.png")), size=(24, 24))
+        self.icon_split = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "split.png")), size=(24, 24))
+        self.icon_clear = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "clear.png")), size=(24, 24))
+        self.icon_mode = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "mode.png")), size=(24, 24))
+        self.icon_drag = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "drag.png")), size=(24, 24))
+        self.icon_addpage = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "addpage.png")), size=(24, 24))
+        self.icon_transcribe = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "transcribe.png")), size=(24, 24))
+        self.icon_prev = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "prev.png")), size=(24, 24))
+        self.icon_next = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "next.png")), size=(24, 24))
+        self.icon_export = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "export.png")), size=(24, 24))
+        self.icon_exportnext = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "exportnext.png")), size=(24, 24))
+
         # ---- PROJECT MENU FRAME (replaces tk.Menu) ----
-        menu_frame = ctk.CTkFrame(self)
-        menu_frame.pack(side="top", fill="x", pady=0)
-        self.menu_new_btn = ctk.CTkButton(menu_frame, text="New Project", command=self.menu_new_project, width=120)
-        self.menu_new_btn.pack(side="left", padx=5, pady=2)
-        self.menu_open_btn = ctk.CTkButton(menu_frame, text="Open Project", command=self.menu_open_project, width=120)
-        self.menu_open_btn.pack(side="left", padx=5, pady=2)
-        self.menu_save_btn = ctk.CTkButton(menu_frame, text="Save Project", command=self.menu_save_project, width=120)
-        self.menu_save_btn.pack(side="left", padx=5, pady=2)
-        self.menu_exit_btn = ctk.CTkButton(menu_frame, text="Exit", command=self.quit, width=80)
-        self.menu_exit_btn.pack(side="left", padx=5, pady=2)
+        menu_frame = ctk.CTkFrame(self, corner_radius=10)
+        menu_frame.pack(side="top", fill="x", pady=5, padx=5)
+        self.menu_new_btn = ctk.CTkButton(menu_frame, image=self.icon_new, text="New Project", compound="left", command=self.menu_new_project, width=140, font=("Arial", 14, "bold"))
+        self.menu_new_btn.pack(side="left", padx=8, pady=4)
+        self.menu_open_btn = ctk.CTkButton(menu_frame, image=self.icon_open, text="Open Project", compound="left", command=self.menu_open_project, width=140, font=("Arial", 14, "bold"))
+        self.menu_open_btn.pack(side="left", padx=8, pady=4)
+        self.menu_save_btn = ctk.CTkButton(menu_frame, image=self.icon_save, text="Save Project", compound="left", command=self.menu_save_project, width=140, font=("Arial", 14, "bold"))
+        self.menu_save_btn.pack(side="left", padx=8, pady=4)
+        self.menu_exit_btn = ctk.CTkButton(menu_frame, image=self.icon_exit, text="Exit", compound="left", command=self.quit, width=100, font=("Arial", 14, "bold"))
+        self.menu_exit_btn.pack(side="left", padx=8, pady=4)
 
         # ---- TOP FRAME ----
-        top_frame = ctk.CTkFrame(self)
-        top_frame.pack(side="top", fill="x", pady=5)
+        top_frame = ctk.CTkFrame(self, corner_radius=10)
+        top_frame.pack(side="top", fill="x", pady=5, padx=5)
 
         # Left side labels for info
-        self.pdf_name_label = ctk.CTkLabel(top_frame, text="PDF: ", width=200)
+        self.pdf_name_label = ctk.CTkLabel(top_frame, text="PDF: ", width=200, font=("Arial", 13, "bold"))
         self.pdf_name_label.pack(side="left", padx=10)
 
-        self.page_number_label = ctk.CTkLabel(top_frame, text="Page: ", width=100)
+        self.page_number_label = ctk.CTkLabel(top_frame, text="Page: ", width=100, font=("Arial", 13, "bold"))
         self.page_number_label.pack(side="left", padx=10)
 
-        self.scan_page_label = ctk.CTkLabel(top_frame, text=f"Current Scan Page: ")
+        self.scan_page_label = ctk.CTkLabel(top_frame, text=f"Current Scan Page: ", font=("Arial", 13, "bold"))
         self.scan_page_label.pack(side="left", padx=10)
 
-        self.mode_label = ctk.CTkLabel(top_frame, text=f"Mode: {self.current_mode}")
+        self.mode_label = ctk.CTkLabel(top_frame, text=f"Mode: {self.current_mode}", font=("Arial", 13, "bold"))
         self.mode_label.pack(side="left", padx=10)
 
-        self.segment_input_mode_label = ctk.CTkLabel(top_frame, text=f"Segment Input: {self.segment_input_mode}")
+        self.segment_input_mode_label = ctk.CTkLabel(top_frame, text=f"Segment Input: {self.segment_input_mode}", font=("Arial", 13, "bold"))
         self.segment_input_mode_label.pack(side="left", padx=10)
 
         self.rotation_scale = ctk.CTkSlider(
-            top_frame, from_=0, to=360, number_of_steps=720, command=self.on_rotation_scale
+            top_frame, from_=0, to=360, number_of_steps=720, command=self.on_rotation_scale, width=200
         )
         self.rotation_scale.set(self.rotation_angle)
         self.rotation_scale.pack(side="left", padx=10)
-        self.rotation_label = ctk.CTkLabel(top_frame, text=f"Rotation: {self.rotation_angle}°")
+        self.rotation_label = ctk.CTkLabel(top_frame, text=f"Rotation: {self.rotation_angle}°", font=("Arial", 13))
         self.rotation_label.pack(side="left", padx=10)
 
         # On the top frame, add the segment manipulation buttons
-        top_btn_frame = ctk.CTkFrame(top_frame)
+        top_btn_frame = ctk.CTkFrame(top_frame, corner_radius=10)
         top_btn_frame.pack(side="right", fill="x", padx=10)
 
-        self.remove_last_segment_btn = ctk.CTkButton(top_btn_frame, text="Remove Last Segment (Shift)", command=self.remove_last_segment)
+        self.remove_last_segment_btn = ctk.CTkButton(top_btn_frame, image=self.icon_remove, text="Remove Last (Shift)", compound="left", command=self.remove_last_segment, width=120, font=("Arial", 12))
         self.remove_last_segment_btn.pack(side="left", padx=5)
-
-        self.split_last_segment_btn = ctk.CTkButton(top_btn_frame, text="Split Last Segment (Tab)", command=self.split_last_segment)
+        self.split_last_segment_btn = ctk.CTkButton(top_btn_frame, image=self.icon_split, text="Split Last (Tab)", compound="left", command=self.split_last_segment, width=120, font=("Arial", 12))
         self.split_last_segment_btn.pack(side="left", padx=5)
-
-        self.clear_segments_btn = ctk.CTkButton(top_btn_frame, text="Clear Segments (C)", command=self.clear_segments)
+        self.clear_segments_btn = ctk.CTkButton(top_btn_frame, image=self.icon_clear, text="Clear (C)", compound="left", command=self.clear_segments, width=100, font=("Arial", 12))
         self.clear_segments_btn.pack(side="left", padx=5)
-
-        self.switch_mode_btn = ctk.CTkButton(top_btn_frame, text="Switch Add/Edit Mode (Ctrl)", command=self.switch_mode)
+        self.switch_mode_btn = ctk.CTkButton(top_btn_frame, image=self.icon_mode, text="Add/Edit (Ctrl)", compound="left", command=self.switch_mode, width=120, font=("Arial", 12))
         self.switch_mode_btn.pack(side="left", padx=5)
-
-        self.toggle_input_mode_btn = ctk.CTkButton(top_btn_frame, text="Toggle Drag/Click (D)", command=self.toggle_segment_input_mode)
+        self.toggle_input_mode_btn = ctk.CTkButton(top_btn_frame, image=self.icon_drag, text="Drag/Click (D)", compound="left", command=self.toggle_segment_input_mode, width=120, font=("Arial", 12))
         self.toggle_input_mode_btn.pack(side="left", padx=5)
-
-        self.add_scan_page_btn = ctk.CTkButton(top_btn_frame, text="Add Scan Page (Alt)", command=self.add_scan_page)
+        self.add_scan_page_btn = ctk.CTkButton(top_btn_frame, image=self.icon_addpage, text="Add Scan Page (Alt)", compound="left", command=self.add_scan_page, width=140, font=("Arial", 12))
         self.add_scan_page_btn.pack(side="left", padx=5)
-
-        # Add transcription button
-        self.transcribe_btn = ctk.CTkButton(top_btn_frame, text="Transcribe Segments (T)", command=self.transcribe_segments)
+        self.transcribe_btn = ctk.CTkButton(top_btn_frame, image=self.icon_transcribe, text="Transcribe (T)", compound="left", command=self.transcribe_segments, width=140, font=("Arial", 12, "bold"))
         self.transcribe_btn.pack(side="left", padx=5)
 
         # ---- MAIN CONTENT FRAME ----
-        main_frame = ctk.CTkFrame(self)
-        main_frame.pack(side="top", fill="both", expand=True, pady=5)
+        main_frame = ctk.CTkFrame(self, corner_radius=10)
+        main_frame.pack(side="top", fill="both", expand=True, pady=5, padx=5)
 
         # Left side - Canvas
-        canvas_frame = ctk.CTkFrame(main_frame)
-        canvas_frame.pack(side="left", fill="both", expand=True, padx=5)
+        canvas_frame = ctk.CTkFrame(main_frame, corner_radius=10)
+        canvas_frame.pack(side="left", fill="both", expand=True, padx=5, pady=5)
 
-        self.canvas = ctk.CTkCanvas(canvas_frame, bg="#222222", width=1000, height=700, highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
+        self.canvas = ctk.CTkCanvas(canvas_frame, bg="#181a1b", width=1000, height=700, highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True, padx=5, pady=5)
         self.canvas.bind("<Configure>", lambda e: self.update_canvas_image())
 
         # Right side - Transcription display
-        transcription_frame = ctk.CTkFrame(main_frame)
-        transcription_frame.pack(side="right", fill="both", expand=True, padx=5)
+        transcription_frame = ctk.CTkFrame(main_frame, corner_radius=10)
+        transcription_frame.pack(side="right", fill="both", expand=True, padx=5, pady=5)
 
         # Transcription header
-        transcription_header = ctk.CTkLabel(transcription_frame, text="Transcription Results", font=("Arial", 16, "bold"))
+        transcription_header = ctk.CTkLabel(transcription_frame, text="Transcription Results", font=("Arial", 18, "bold"))
         transcription_header.pack(pady=10)
 
         # Transcription text area with scrollbar
-        transcription_text_frame = ctk.CTkFrame(transcription_frame)
+        transcription_text_frame = ctk.CTkFrame(transcription_frame, corner_radius=10)
         transcription_text_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
-        self.transcription_text = tk.Text(transcription_text_frame, wrap=tk.WORD, bg="gray20", fg="white", font=("Arial", 12))
-        self.transcription_text.pack(side="left", fill="both", expand=True)
+        self.transcription_text = tk.Text(transcription_text_frame, wrap=tk.WORD, bg="#23272e", fg="#e0e0e0", font=("Consolas", 13), relief=tk.FLAT, borderwidth=0, insertbackground="#e0e0e0")
+        self.transcription_text.pack(side="left", fill="both", expand=True, padx=2, pady=2)
 
         transcription_scrollbar = ctk.CTkScrollbar(transcription_text_frame, command=self.transcription_text.yview)
         transcription_scrollbar.pack(side="right", fill="y")
         self.transcription_text.configure(yscrollcommand=transcription_scrollbar.set)
 
+        self.transcription_text_frame = transcription_text_frame
+        self.transcription_frame = transcription_frame
+        self.transcription_header = transcription_header
+        self.transcription_loading_bar = None
+
         # ---- BOTTOM FRAME ----
-        bottom_frame = ctk.CTkFrame(self)
-        bottom_frame.pack(side="bottom", fill="x", pady=5)
+        bottom_frame = ctk.CTkFrame(self, corner_radius=10)
+        bottom_frame.pack(side="bottom", fill="x", pady=5, padx=5)
 
-        bottom_left_frame = ctk.CTkFrame(bottom_frame)
-        bottom_left_frame.pack(side="left", padx=10)
+        bottom_left_frame = ctk.CTkFrame(bottom_frame, corner_radius=10)
+        bottom_left_frame.pack(side="left", padx=10, pady=2)
 
-        self.prev_page_btn = ctk.CTkButton(bottom_left_frame, text="Prev Page (A)", command=self.prev_page)
+        self.prev_page_btn = ctk.CTkButton(bottom_left_frame, image=self.icon_prev, text="Prev (A)", compound="left", command=self.prev_page, width=120, font=("Arial", 12))
         self.prev_page_btn.pack(side="left", padx=5)
-
-        self.next_page_btn = ctk.CTkButton(bottom_left_frame, text="Next Page (S)", command=self.next_page)
+        self.next_page_btn = ctk.CTkButton(bottom_left_frame, image=self.icon_next, text="Next (S)", compound="left", command=self.next_page, width=120, font=("Arial", 12))
         self.next_page_btn.pack(side="left", padx=5)
 
-        bottom_right_frame = ctk.CTkFrame(bottom_frame)
-        bottom_right_frame.pack(side="right", padx=10)
+        bottom_right_frame = ctk.CTkFrame(bottom_frame, corner_radius=10)
+        bottom_right_frame.pack(side="right", padx=10, pady=2)
 
-        self.export_only_btn = ctk.CTkButton(bottom_right_frame, text="Export Segments (E)", command=self.export_segments_only)
+        self.export_only_btn = ctk.CTkButton(bottom_right_frame, image=self.icon_export, text="Export (E)", compound="left", command=self.export_segments_only, width=120, font=("Arial", 12))
         self.export_only_btn.pack(side="left", padx=5)
-
-        self.export_page_btn = ctk.CTkButton(bottom_right_frame, text="Export Segments & Next (R)", command=self.export_and_next)
+        self.export_page_btn = ctk.CTkButton(bottom_right_frame, image=self.icon_exportnext, text="Export & Next (R)", compound="left", command=self.export_and_next, width=160, font=("Arial", 12))
         self.export_page_btn.pack(side="right", padx=5)
 
-        # Bind events
-        self.canvas.bind("<ButtonPress-1>", self.on_left_button_press)
-        self.canvas.bind("<B1-Motion>", self.on_left_button_move)
-        self.canvas.bind("<ButtonRelease-1>", self.on_left_button_release)
-
-        self.drag_start = None
-        self.drag_current = None
-        self.is_dragging_vertex = False
+        # Tooltips (simple implementation)
+        self.add_tooltip(self.menu_new_btn, "Start a new project")
+        self.add_tooltip(self.menu_open_btn, "Open an existing project")
+        self.add_tooltip(self.menu_save_btn, "Save the current project")
+        self.add_tooltip(self.menu_exit_btn, "Exit the application")
+        self.add_tooltip(self.remove_last_segment_btn, "Remove the last segment")
+        self.add_tooltip(self.split_last_segment_btn, "Split the last segment into sub-segments")
+        self.add_tooltip(self.clear_segments_btn, "Clear all segments on this page")
+        self.add_tooltip(self.switch_mode_btn, "Switch between Add and Edit mode")
+        self.add_tooltip(self.toggle_input_mode_btn, "Toggle between Drag and Click input mode")
+        self.add_tooltip(self.add_scan_page_btn, "Add a new scan page")
+        self.add_tooltip(self.transcribe_btn, "Transcribe the current segments using AI")
+        self.add_tooltip(self.export_only_btn, "Export segments as images")
+        self.add_tooltip(self.export_page_btn, "Export segments and go to the next page")
 
         self.bind_keybindings()
         self.load_page_image()
+
+    def add_tooltip(self, widget, text):
+        tooltip = tk.Toplevel(widget)
+        tooltip.withdraw()
+        tooltip.overrideredirect(True)
+        label = tk.Label(tooltip, text=text, background="#222", foreground="#fff", relief="solid", borderwidth=1, font=("Arial", 10))
+        label.pack(ipadx=4, ipady=2)
+        def enter(event):
+            x = widget.winfo_rootx() + 40
+            y = widget.winfo_rooty() + 30
+            tooltip.geometry(f"+{x}+{y}")
+            tooltip.deiconify()
+        def leave(event):
+            tooltip.withdraw()
+        widget.bind("<Enter>", enter)
+        widget.bind("<Leave>", leave)
+
+    def copy_transcription(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.transcription_text.get("1.0", tk.END))
+        self.status_var.set("Transcription copied to clipboard!")
 
     def bind_keybindings(self):
         # Segment editing
@@ -936,58 +1042,66 @@ class App(ctk.CTk):
             messagebox.showwarning("Warning", "No scan page selected.")
             return
 
-        # Get the current page's segments
         segments = self.segment_manager.get_segments_by_scan_page(self.current_scan_page_number)
         if not segments:
             messagebox.showwarning("Warning", "No segments to transcribe.")
             return
 
-        # Create a temporary directory for the segments
         temp_dir = os.path.join(self.project_manager.project_path, "temp_segments")
         os.makedirs(temp_dir, exist_ok=True)
 
-        try:
-            # Export segments to temporary directory
-            segment_images = []
-            for i, segment in enumerate(segments):
-                points = self.get_rotated_points(segment["original_points"])
-                img_path = os.path.join(temp_dir, f"segment_{i}.png")
-                self.export_segment(points, img_path)
-                segment_images.append(img_path)
+        # Show loading bar in place of text
+        self.transcription_text.pack_forget()
+        if self.transcription_loading_bar is None:
+            self.transcription_loading_bar = ctk.CTkProgressBar(self.transcription_text_frame, width=300, height=24, corner_radius=12, mode="indeterminate")
+        self.transcription_loading_bar.pack(expand=True, pady=40)
+        self.transcription_loading_bar.start()
+        self.transcription_frame.update()
 
-            # Build the prompt context
-            pdfname = os.path.splitext(os.path.basename(self.pdf_manager.get_current_pdf_path()))[0]
-            current_page = self.pdf_manager.get_current_page_index() + 1
-            messages = self.build_prompt_context(pdfname, current_page, segment_images)
+        def do_transcription():
+            try:
+                segment_images = []
+                for i, segment in enumerate(segments):
+                    points = self.get_rotated_points(segment["original_points"])
+                    img_path = os.path.join(temp_dir, f"segment_{i}.png")
+                    self.export_segment(points, img_path)
+                    segment_images.append(img_path)
 
-            # Call the API
-            self.transcription_text.delete(1.0, tk.END)
-            self.transcription_text.insert(tk.END, "Transcribing... Please wait...\n")
-            self.update()
+                pdfname = os.path.splitext(os.path.basename(self.pdf_manager.get_current_pdf_path()))[0]
+                current_page = self.pdf_manager.get_current_page_index() + 1
+                messages = self.build_prompt_context(pdfname, current_page, segment_images)
 
-            transcript = self.call_api(messages)
+                transcript = self.call_api(messages)
 
-            # Display the results
-            self.transcription_text.delete(1.0, tk.END)
-            self.transcription_text.insert(tk.END, transcript)
+                transcript_dir = os.path.join(self.project_manager.project_path, "transcripts")
+                os.makedirs(transcript_dir, exist_ok=True)
+                transcript_file = os.path.join(transcript_dir, f"{pdfname}.txt")
+                with open(transcript_file, "a", encoding="utf-8") as f:
+                    f.write(f"PAGE {current_page}\n")
+                    f.write(transcript.strip() + "\n\n")
 
-            # Save the transcript
-            transcript_dir = os.path.join(self.project_manager.project_path, "transcripts")
-            os.makedirs(transcript_dir, exist_ok=True)
-            transcript_file = os.path.join(transcript_dir, f"{pdfname}.txt")
-            
-            with open(transcript_file, "a", encoding="utf-8") as f:
-                f.write(f"PAGE {current_page}\n")
-                f.write(transcript.strip() + "\n\n")
+                def on_success():
+                    self.transcription_loading_bar.stop()
+                    self.transcription_loading_bar.pack_forget()
+                    self.transcription_text.pack(side="left", fill="both", expand=True, padx=2, pady=2)
+                    self.transcription_text.delete(1.0, tk.END)
+                    self.transcription_text.insert(tk.END, transcript)
+                self.after(0, on_success)
+            except Exception as e:
+                def on_error():
+                    if self.transcription_loading_bar:
+                        self.transcription_loading_bar.stop()
+                        self.transcription_loading_bar.pack_forget()
+                    self.transcription_text.pack(side="left", fill="both", expand=True, padx=2, pady=2)
+                    messagebox.showerror("Error", f"Transcription failed: {str(e)}")
+                self.after(0, on_error)
+            finally:
+                if os.path.exists(temp_dir):
+                    for file in os.listdir(temp_dir):
+                        os.remove(os.path.join(temp_dir, file))
+                    os.rmdir(temp_dir)
 
-        except Exception as e:
-            messagebox.showerror("Error", f"Transcription failed: {str(e)}")
-        finally:
-            # Clean up temporary directory
-            if os.path.exists(temp_dir):
-                for file in os.listdir(temp_dir):
-                    os.remove(os.path.join(temp_dir, file))
-                os.rmdir(temp_dir)
+        threading.Thread(target=do_transcription, daemon=True).start()
 
     def build_prompt_context(self, pdfname: str, current_page: int, segment_images: List[str]) -> List[dict]:
         """Build the prompt context for the transcription API."""
