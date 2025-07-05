@@ -5,7 +5,6 @@ load_dotenv()
 
 DOCS_DIR = "docs"
 EXPORT_DIR = "export"
-STORAGE_FILE = "segments.json"
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 MODEL_NAME = "gpt-4o"

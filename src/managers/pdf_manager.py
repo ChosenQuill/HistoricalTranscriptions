@@ -19,8 +19,13 @@ class PDFManager:
     def load_pdf(self, pdf_path):
         if self.current_doc:
             self.current_doc.close()
-        self.current_doc = fitz.open(pdf_path)
-        self.current_page_index = 0
+        try:
+            self.current_doc = fitz.open(pdf_path)
+            self.current_page_index = 0
+        except Exception as e:
+            print(f"Error loading PDF {pdf_path}: {e}")
+            self.current_doc = None
+            self.current_page_index = 0
 
     def get_current_pdf_name(self):
         if not self.pdf_files:

@@ -21,6 +21,10 @@ from pathlib import Path
 from collections import defaultdict
 from typing import List
 import threading
+import tkinter.simpledialog as sd
+
+# Import constants from config
+from utils.config import MODEL_NAME, EXPORT_DIR
 
 class ProjectManager:
     def __init__(self):
@@ -53,8 +57,7 @@ class ProjectManager:
         self.project_json_path = os.path.join(project_dir, "project.json")
         self.project_data = {
             "pdfs": pdf_names,
-            "segments": {},
-            "transcripts": {},
+            "segments": {"pdfs": {}}
         }
         with open(self.project_json_path, "w") as f:
             json.dump(self.project_data, f, indent=2)
@@ -77,8 +80,8 @@ class ProjectManager:
 
     def save_project(self):
         if self.project_json_path and self.project_data:
-            with open(self.project_json_path, "w") as f:
-                json.dump(self.project_data, f, indent=2)
+            from utils.file_utils import save_project_data
+            save_project_data(self.project_path, self.project_data)
 
     def new_project_with_paths(self, parent, project_dir, pdf_files):
         if not project_dir or not pdf_files:
@@ -87,23 +90,39 @@ class ProjectManager:
         os.makedirs(pdfs_dir, exist_ok=True)
         pdf_names = []
         for pdf in pdf_files:
+            if not os.path.exists(pdf):
+                print(f"Warning: PDF file not found: {pdf}")
+                continue
             base = os.path.basename(pdf)
             dest = os.path.join(pdfs_dir, base)
             if not os.path.exists(dest):
-                with open(pdf, "rb") as fsrc, open(dest, "wb") as fdst:
-                    fdst.write(fsrc.read())
+                try:
+                    with open(pdf, "rb") as fsrc, open(dest, "wb") as fdst:
+                        fdst.write(fsrc.read())
+                except Exception as e:
+                    print(f"Error copying PDF {pdf}: {e}")
+                    continue
             pdf_names.append(base)
+        
+        if not pdf_names:
+            print("No valid PDF files found")
+            return False
+            
         os.makedirs(os.path.join(project_dir, "segments"), exist_ok=True)
         os.makedirs(os.path.join(project_dir, "transcripts"), exist_ok=True)
         self.project_json_path = os.path.join(project_dir, "project.json")
         self.project_data = {
             "pdfs": pdf_names,
-            "segments": {},
-            "transcripts": {},
+            "segments": {"pdfs": {}}
         }
         with open(self.project_json_path, "w") as f:
             json.dump(self.project_data, f, indent=2)
         self.project_path = project_dir
+        
+        # Try to migrate existing global data if available
+        from utils.file_utils import migrate_global_to_project_storage
+        migrate_global_to_project_storage(project_dir)
+        
         return True
 
     def open_project_with_path(self, parent, project_dir):
@@ -117,28 +136,122 @@ class ProjectManager:
         self.project_json_path = project_json
         return True
 
+    def add_pdfs_to_project(self, pdf_files):
+        """Add new PDFs to an existing project."""
+        if not self.project_path or not pdf_files:
+            return False
+        
+        pdfs_dir = os.path.join(self.project_path, "pdfs")
+        os.makedirs(pdfs_dir, exist_ok=True)
+        
+        new_pdf_names = []
+        for pdf in pdf_files:
+            if not os.path.exists(pdf):
+                print(f"Warning: PDF file not found: {pdf}")
+                continue
+            base = os.path.basename(pdf)
+            dest = os.path.join(pdfs_dir, base)
+            if not os.path.exists(dest):
+                try:
+                    with open(pdf, "rb") as fsrc, open(dest, "wb") as fdst:
+                        fdst.write(fsrc.read())
+                except Exception as e:
+                    print(f"Error copying PDF {pdf}: {e}")
+                    continue
+            new_pdf_names.append(base)
+        
+        if not new_pdf_names:
+            print("No valid PDF files found to add")
+            return False
+        
+        # Add to existing PDFs list
+        if "pdfs" not in self.project_data:
+            self.project_data["pdfs"] = []
+        self.project_data["pdfs"].extend(new_pdf_names)
+        
+        self.save_project()
+        return True
+
+    def get_all_pdfs(self):
+        """Get list of all PDFs in the project."""
+        if not self.project_path:
+            return []
+        pdfs_dir = os.path.join(self.project_path, "pdfs")
+        if not os.path.exists(pdfs_dir):
+            return []
+        return [os.path.join(pdfs_dir, pdf) for pdf in self.project_data.get("pdfs", [])]
+
+    def get_segmented_pdfs(self):
+        """Get list of PDFs that have segments."""
+        from utils.file_utils import compute_pdf_hash, load_project_data
+        segmented_pdfs = []
+        for pdf_name in self.project_data.get("pdfs", []):
+            pdf_path = os.path.join(self.project_path, "pdfs", pdf_name)
+            if os.path.exists(pdf_path):
+                # Check if this PDF has any segments in project-specific storage
+                pdf_hash = compute_pdf_hash(pdf_path)
+                project_data = load_project_data(self.project_path)
+                storage_data = project_data.get("segments", {"pdfs": {}})
+                if pdf_hash in storage_data.get("pdfs", {}):
+                    pdf_entry = storage_data["pdfs"][pdf_hash]
+                    if "pages" in pdf_entry and pdf_entry["pages"]:
+                        segmented_pdfs.append(pdf_name)
+        return segmented_pdfs
+
 class StartWindow(ctk.CTkToplevel):
     def __init__(self, master, on_project_selected):
         super().__init__(master)
-        self.title("Start Project")
-        self.geometry("400x220")
+        self.title("Historical Restoral")
+        self.geometry("600x500")
         self.on_project_selected = on_project_selected
         self.pm = ProjectManager()
         self.configure(bg="#181a1b")
+        
+        # Center the window
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() // 2) - (600 // 2)
+        y = (self.winfo_screenheight() // 2) - (500 // 2)
+        self.geometry(f"600x500+{x}+{y}")
+        
         # Load icons for start window
         icon_dir = os.path.join(os.path.dirname(__file__), "icons")
-        self.icon_new = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "new.png")), size=(24, 24))
-        self.icon_open = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "open.png")), size=(24, 24))
-        label = ctk.CTkLabel(self, text="Welcome! Start a new project or open an existing one.", font=("Arial", 16, "bold"))
-        label.pack(pady=24)
-        btn_new = ctk.CTkButton(self, image=self.icon_new, text="New Project", compound="left", command=self.new_project, width=180, font=("Arial", 14, "bold"))
+        try:
+            self.icon_new = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "new.png")), size=(32, 32))
+            self.icon_open = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "open.png")), size=(32, 32))
+        except Exception as e:
+            print(f"Warning: Could not load icons: {e}")
+            self.icon_new = None
+            self.icon_open = None
+        
+        # Main title
+        title_label = ctk.CTkLabel(self, text="Historical Restoral", font=("Arial", 28, "bold"), text_color="#4CAF50")
+        title_label.pack(pady=(40, 20))
+        
+        # Subtitle
+        subtitle_label = ctk.CTkLabel(self, text="Historical Document Segmentation & Transcription Tool", font=("Arial", 14), text_color="#B0B0B0")
+        subtitle_label.pack(pady=(0, 30))
+        
+        # Welcome text with better wrapping
+        welcome_text = ("Welcome to Historical Restoral! This powerful tool helps you segment and transcribe historical documents.\n\n"
+                       "Start a new project to begin working with your PDF documents, or open an existing project to continue your work.")
+        welcome_label = ctk.CTkLabel(self, text=welcome_text, font=("Arial", 12), wraplength=500, justify="center")
+        welcome_label.pack(pady=(0, 40))
+        
+        # Button frame for better organization
+        button_frame = ctk.CTkFrame(self, fg_color="transparent")
+        button_frame.pack(pady=20)
+        
+        btn_new = ctk.CTkButton(button_frame, image=self.icon_new, text="New Project", compound="left", 
+                               command=self.new_project, width=220, height=50, font=("Arial", 16, "bold"))
         btn_new.pack(pady=10)
-        btn_open = ctk.CTkButton(self, image=self.icon_open, text="Open Project", compound="left", command=self.open_project, width=180, font=("Arial", 14, "bold"))
+        
+        btn_open = ctk.CTkButton(button_frame, image=self.icon_open, text="Open Project", compound="left", 
+                                command=self.open_project, width=220, height=50, font=("Arial", 16, "bold"))
         btn_open.pack(pady=10)
 
     def new_project(self):
-        # Use a custom ctk dialog for folder selection if possible
-        project_dir = self.ask_directory("Select Project Directory")
+        # Use the new ask_directory method with folder creation option
+        project_dir = self.ask_directory_for_new_project("Select Project Directory")
         if not project_dir:
             return False
         pdf_files = self.ask_open_files("Select PDF Files for Project", filetypes=[("PDF Files", "*.pdf")])
@@ -149,15 +262,38 @@ class StartWindow(ctk.CTkToplevel):
             self.destroy()
 
     def open_project(self):
-        project_dir = self.ask_directory("Open Project Directory")
+        project_dir = self.ask_directory_for_existing_project("Open Project Directory")
         if not project_dir:
             return False
         if self.pm.open_project_with_path(self, project_dir):
             self.on_project_selected(self.pm)
             self.destroy()
 
-    def ask_directory(self, title):
-        # CustomTkinter does not have a native directory picker, so fallback to tk.filedialog but theme the parent
+    def ask_directory_for_new_project(self, title):
+        """Ask for directory with option to create new folder (for new projects)."""
+        import tkinter.filedialog as fd
+        
+        # First, let user select a directory
+        directory = fd.askdirectory(title=title, parent=self)
+        if not directory:
+            return None
+            
+        # Ask if they want to create a new folder
+        if messagebox.askyesno("Create New Folder", "Do you want to create a new folder in the selected directory?"):
+            folder_name = sd.askstring("Folder Name", "Enter folder name:", parent=self)
+            if folder_name:
+                new_path = os.path.join(directory, folder_name)
+                try:
+                    os.makedirs(new_path, exist_ok=True)
+                    return new_path
+                except Exception as e:
+                    messagebox.showerror("Error", f"Could not create folder: {str(e)}")
+                    return None
+        
+        return directory
+
+    def ask_directory_for_existing_project(self, title):
+        """Ask for directory without folder creation option (for opening existing projects)."""
         import tkinter.filedialog as fd
         return fd.askdirectory(title=title, parent=self)
 
@@ -172,7 +308,7 @@ class App(ctk.CTk):
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("dark-blue")
         self.title("Historical Document Segmenter")
-        self.geometry("1200x900")
+        self.geometry("1920x1080")
         self.project_manager = None
         self.wait_visibility()
         self.withdraw()
@@ -183,9 +319,17 @@ class App(ctk.CTk):
         StartWindow(self, on_project_selected)
 
     def init_main_ui(self):
-        self.storage_data = load_storage()
+        from utils.file_utils import load_project_data
+        project_data = load_project_data(self.project_manager.project_path)
+        self.storage_data = project_data.get("segments", {"pdfs": {}})
 
+        # Initialize PDF manager with project PDFs
+        project_pdfs = self.project_manager.get_all_pdfs()
         self.pdf_manager = PDFManager()
+        self.pdf_manager.pdf_files = project_pdfs
+        if project_pdfs:
+            self.pdf_manager.load_pdf(project_pdfs[0])
+        
         self.segment_manager = SegmentManager()
 
         self.current_scan_page_number = None
@@ -204,84 +348,107 @@ class App(ctk.CTk):
 
         self.click_points = []
 
-        self.minsize(1200, 900)
+        self.minsize(1400, 1000)
 
         # Load icons
         icon_dir = os.path.join(os.path.dirname(__file__), "icons")
-        self.icon_new = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "new.png")), size=(24, 24))
-        self.icon_open = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "open.png")), size=(24, 24))
-        self.icon_save = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "save.png")), size=(24, 24))
-        self.icon_exit = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "exit.png")), size=(24, 24))
-        self.icon_remove = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "remove.png")), size=(24, 24))
-        self.icon_split = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "split.png")), size=(24, 24))
-        self.icon_clear = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "clear.png")), size=(24, 24))
-        self.icon_mode = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "mode.png")), size=(24, 24))
-        self.icon_drag = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "drag.png")), size=(24, 24))
-        self.icon_addpage = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "addpage.png")), size=(24, 24))
-        self.icon_transcribe = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "transcribe.png")), size=(24, 24))
-        self.icon_prev = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "prev.png")), size=(24, 24))
-        self.icon_next = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "next.png")), size=(24, 24))
-        self.icon_export = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "export.png")), size=(24, 24))
-        self.icon_exportnext = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "exportnext.png")), size=(24, 24))
+        try:
+            self.icon_new = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "new.png")), size=(24, 24))
+            self.icon_open = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "open.png")), size=(24, 24))
+            self.icon_save = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "save.png")), size=(24, 24))
+            self.icon_exit = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "exit.png")), size=(24, 24))
+            self.icon_remove = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "remove.png")), size=(24, 24))
+            self.icon_split = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "split.png")), size=(24, 24))
+            self.icon_clear = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "clear.png")), size=(24, 24))
+            self.icon_mode = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "mode.png")), size=(24, 24))
+            self.icon_drag = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "drag.png")), size=(24, 24))
+            self.icon_addpage = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "addpage.png")), size=(24, 24))
+            self.icon_transcribe = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "transcribe.png")), size=(24, 24))
+            self.icon_prev = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "prev.png")), size=(24, 24))
+            self.icon_next = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "next.png")), size=(24, 24))
+            self.icon_export = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "export.png")), size=(24, 24))
+            self.icon_exportnext = ctk.CTkImage(light_image=Image.open(os.path.join(icon_dir, "exportnext.png")), size=(24, 24))
+        except Exception as e:
+            print(f"Warning: Could not load icons: {e}")
+            # Set all icons to None to prevent crashes
+            self.icon_new = self.icon_open = self.icon_save = self.icon_exit = None
+            self.icon_remove = self.icon_split = self.icon_clear = self.icon_mode = None
+            self.icon_drag = self.icon_addpage = self.icon_transcribe = None
+            self.icon_prev = self.icon_next = self.icon_export = self.icon_exportnext = None
 
-        # ---- PROJECT MENU FRAME (replaces tk.Menu) ----
-        menu_frame = ctk.CTkFrame(self, corner_radius=10)
-        menu_frame.pack(side="top", fill="x", pady=5, padx=5)
-        self.menu_new_btn = ctk.CTkButton(menu_frame, image=self.icon_new, text="New Project", compound="left", command=self.menu_new_project, width=140, font=("Arial", 14, "bold"))
+        # ---- PROJECT BUTTONS FRAME ----
+        project_buttons_frame = ctk.CTkFrame(self, corner_radius=10)
+        project_buttons_frame.pack(side="top", fill="x", pady=5, padx=5)
+        
+        self.menu_new_btn = ctk.CTkButton(project_buttons_frame, image=self.icon_new, text="New Project", compound="left", command=self.menu_new_project, width=140, font=("Arial", 14, "bold"))
         self.menu_new_btn.pack(side="left", padx=8, pady=4)
-        self.menu_open_btn = ctk.CTkButton(menu_frame, image=self.icon_open, text="Open Project", compound="left", command=self.menu_open_project, width=140, font=("Arial", 14, "bold"))
+        self.menu_open_btn = ctk.CTkButton(project_buttons_frame, image=self.icon_open, text="Open Project", compound="left", command=self.menu_open_project, width=140, font=("Arial", 14, "bold"))
         self.menu_open_btn.pack(side="left", padx=8, pady=4)
-        self.menu_save_btn = ctk.CTkButton(menu_frame, image=self.icon_save, text="Save Project", compound="left", command=self.menu_save_project, width=140, font=("Arial", 14, "bold"))
+        self.menu_save_btn = ctk.CTkButton(project_buttons_frame, image=self.icon_save, text="Save Project", compound="left", command=self.menu_save_project, width=140, font=("Arial", 14, "bold"))
         self.menu_save_btn.pack(side="left", padx=8, pady=4)
-        self.menu_exit_btn = ctk.CTkButton(menu_frame, image=self.icon_exit, text="Exit", compound="left", command=self.quit, width=100, font=("Arial", 14, "bold"))
-        self.menu_exit_btn.pack(side="left", padx=8, pady=4)
+        self.menu_add_pdfs_btn = ctk.CTkButton(project_buttons_frame, image=self.icon_open, text="Add PDFs", compound="left", command=self.add_pdfs_to_project, width=120, font=("Arial", 14, "bold"))
+        self.menu_add_pdfs_btn.pack(side="left", padx=8, pady=4)
+        self.menu_exit_btn = ctk.CTkButton(project_buttons_frame, image=self.icon_exit, text="Exit", compound="left", command=self.quit, width=100, font=("Arial", 14, "bold"))
+        self.menu_exit_btn.pack(side="right", padx=8, pady=4)
+        
+        # ---- PAGE ACTION BUTTONS FRAME ----
+        page_actions_frame = ctk.CTkFrame(self, corner_radius=10)
+        page_actions_frame.pack(side="top", fill="x", pady=5, padx=5)
+        
+        self.remove_last_segment_btn = ctk.CTkButton(page_actions_frame, image=self.icon_remove, text="Remove Last (Shift)", compound="left", command=self.remove_last_segment, width=120, font=("Arial", 12))
+        self.remove_last_segment_btn.pack(side="left", padx=5, pady=4)
+        self.split_last_segment_btn = ctk.CTkButton(page_actions_frame, image=self.icon_split, text="Split Last (Tab)", compound="left", command=self.split_last_segment, width=120, font=("Arial", 12))
+        self.split_last_segment_btn.pack(side="left", padx=5, pady=4)
+        self.clear_segments_btn = ctk.CTkButton(page_actions_frame, image=self.icon_clear, text="Clear (C)", compound="left", command=self.clear_segments, width=100, font=("Arial", 12))
+        self.clear_segments_btn.pack(side="left", padx=5, pady=4)
+        self.switch_mode_btn = ctk.CTkButton(page_actions_frame, image=self.icon_mode, text="Add/Edit (Ctrl)", compound="left", command=self.switch_mode, width=120, font=("Arial", 12))
+        self.switch_mode_btn.pack(side="left", padx=5, pady=4)
+        self.toggle_input_mode_btn = ctk.CTkButton(page_actions_frame, image=self.icon_drag, text="Drag/Click (D)", compound="left", command=self.toggle_segment_input_mode, width=120, font=("Arial", 12))
+        self.toggle_input_mode_btn.pack(side="left", padx=5, pady=4)
+        self.add_scan_page_btn = ctk.CTkButton(page_actions_frame, image=self.icon_addpage, text="Add Scan Page (Alt)", compound="left", command=self.add_scan_page, width=140, font=("Arial", 12))
+        self.add_scan_page_btn.pack(side="left", padx=5, pady=4)
+        self.transcribe_btn = ctk.CTkButton(page_actions_frame, image=self.icon_transcribe, text="Transcribe (T)", compound="left", command=self.transcribe_segments, width=140, font=("Arial", 12))
+        self.transcribe_btn.pack(side="right", padx=5, pady=4)
+        self.batch_transcribe_btn = ctk.CTkButton(page_actions_frame, image=self.icon_transcribe, text="Transcribe All Segmented", compound="left", command=self.batch_transcribe_all, width=200, font=("Arial", 12))
+        self.batch_transcribe_btn.pack(side="right", padx=5, pady=4)
 
-        # ---- TOP FRAME ----
-        top_frame = ctk.CTkFrame(self, corner_radius=10)
-        top_frame.pack(side="top", fill="x", pady=5, padx=5)
-
-        # Left side labels for info
-        self.pdf_name_label = ctk.CTkLabel(top_frame, text="PDF: ", width=200, font=("Arial", 13, "bold"))
-        self.pdf_name_label.pack(side="left", padx=10)
-
-        self.page_number_label = ctk.CTkLabel(top_frame, text="Page: ", width=100, font=("Arial", 13, "bold"))
-        self.page_number_label.pack(side="left", padx=10)
-
-        self.scan_page_label = ctk.CTkLabel(top_frame, text=f"Current Scan Page: ", font=("Arial", 13, "bold"))
-        self.scan_page_label.pack(side="left", padx=10)
-
-        self.mode_label = ctk.CTkLabel(top_frame, text=f"Mode: {self.current_mode}", font=("Arial", 13, "bold"))
-        self.mode_label.pack(side="left", padx=10)
-
-        self.segment_input_mode_label = ctk.CTkLabel(top_frame, text=f"Segment Input: {self.segment_input_mode}", font=("Arial", 13, "bold"))
-        self.segment_input_mode_label.pack(side="left", padx=10)
-
+        # ---- INFO FRAME ----
+        info_frame = ctk.CTkFrame(self, corner_radius=10)
+        info_frame.pack(side="top", fill="x", pady=5, padx=5)
+        
+        # PDF selector
+        pdf_label = ctk.CTkLabel(info_frame, text="PDFs in Project:", font=("Arial", 14, "bold"))
+        pdf_label.pack(side="left", padx=10, pady=5)
+        
+        # PDF dropdown/combobox
+        self.pdf_var = tk.StringVar()
+        self.pdf_combobox = ctk.CTkComboBox(info_frame, variable=self.pdf_var, command=self.on_pdf_selected, width=300, font=("Arial", 12))
+        self.pdf_combobox.pack(side="left", padx=10, pady=5)
+        
+        # Page info
+        self.page_number_label = ctk.CTkLabel(info_frame, text="Page: ", width=100, font=("Arial", 13, "bold"))
+        self.page_number_label.pack(side="left", padx=10, pady=5)
+        
+        self.scan_page_label = ctk.CTkLabel(info_frame, text=f"Current Scan Page: ", font=("Arial", 13, "bold"))
+        self.scan_page_label.pack(side="left", padx=10, pady=5)
+        
+        # Mode and input info
+        self.mode_label = ctk.CTkLabel(info_frame, text=f"Mode: {self.current_mode}", font=("Arial", 13, "bold"))
+        self.mode_label.pack(side="left", padx=10, pady=5)
+        
+        self.segment_input_mode_label = ctk.CTkLabel(info_frame, text=f"Segment Input: {self.segment_input_mode}", font=("Arial", 13, "bold"))
+        self.segment_input_mode_label.pack(side="left", padx=10, pady=5)
+        
+        # Rotation controls
         self.rotation_scale = ctk.CTkSlider(
-            top_frame, from_=0, to=360, number_of_steps=720, command=self.on_rotation_scale, width=200
+            info_frame, from_=0, to=360, number_of_steps=720, command=self.on_rotation_scale, width=200
         )
         self.rotation_scale.set(self.rotation_angle)
-        self.rotation_scale.pack(side="left", padx=10)
-        self.rotation_label = ctk.CTkLabel(top_frame, text=f"Rotation: {self.rotation_angle}°", font=("Arial", 13))
-        self.rotation_label.pack(side="left", padx=10)
-
-        # On the top frame, add the segment manipulation buttons
-        top_btn_frame = ctk.CTkFrame(top_frame, corner_radius=10)
-        top_btn_frame.pack(side="right", fill="x", padx=10)
-
-        self.remove_last_segment_btn = ctk.CTkButton(top_btn_frame, image=self.icon_remove, text="Remove Last (Shift)", compound="left", command=self.remove_last_segment, width=120, font=("Arial", 12))
-        self.remove_last_segment_btn.pack(side="left", padx=5)
-        self.split_last_segment_btn = ctk.CTkButton(top_btn_frame, image=self.icon_split, text="Split Last (Tab)", compound="left", command=self.split_last_segment, width=120, font=("Arial", 12))
-        self.split_last_segment_btn.pack(side="left", padx=5)
-        self.clear_segments_btn = ctk.CTkButton(top_btn_frame, image=self.icon_clear, text="Clear (C)", compound="left", command=self.clear_segments, width=100, font=("Arial", 12))
-        self.clear_segments_btn.pack(side="left", padx=5)
-        self.switch_mode_btn = ctk.CTkButton(top_btn_frame, image=self.icon_mode, text="Add/Edit (Ctrl)", compound="left", command=self.switch_mode, width=120, font=("Arial", 12))
-        self.switch_mode_btn.pack(side="left", padx=5)
-        self.toggle_input_mode_btn = ctk.CTkButton(top_btn_frame, image=self.icon_drag, text="Drag/Click (D)", compound="left", command=self.toggle_segment_input_mode, width=120, font=("Arial", 12))
-        self.toggle_input_mode_btn.pack(side="left", padx=5)
-        self.add_scan_page_btn = ctk.CTkButton(top_btn_frame, image=self.icon_addpage, text="Add Scan Page (Alt)", compound="left", command=self.add_scan_page, width=140, font=("Arial", 12))
-        self.add_scan_page_btn.pack(side="left", padx=5)
-        self.transcribe_btn = ctk.CTkButton(top_btn_frame, image=self.icon_transcribe, text="Transcribe (T)", compound="left", command=self.transcribe_segments, width=140, font=("Arial", 12, "bold"))
-        self.transcribe_btn.pack(side="left", padx=5)
+        self.rotation_scale.pack(side="left", padx=10, pady=5)
+        self.rotation_label = ctk.CTkLabel(info_frame, text=f"Rotation: {self.rotation_angle}°", font=("Arial", 13))
+        self.rotation_label.pack(side="left", padx=10, pady=5)
+        
+        self.update_pdf_selector()
 
         # ---- MAIN CONTENT FRAME ----
         main_frame = ctk.CTkFrame(self, corner_radius=10)
@@ -291,9 +458,13 @@ class App(ctk.CTk):
         canvas_frame = ctk.CTkFrame(main_frame, corner_radius=10)
         canvas_frame.pack(side="left", fill="both", expand=True, padx=5, pady=5)
 
-        self.canvas = ctk.CTkCanvas(canvas_frame, bg="#181a1b", width=1000, height=700, highlightthickness=0)
+        self.canvas = ctk.CTkCanvas(canvas_frame, bg="#181a1b", width=1200, height=800, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True, padx=5, pady=5)
         self.canvas.bind("<Configure>", lambda e: self.update_canvas_image())
+        # Add mouse event bindings for segment creation and editing
+        self.canvas.bind("<ButtonPress-1>", self.on_left_button_press)
+        self.canvas.bind("<B1-Motion>", self.on_left_button_move)
+        self.canvas.bind("<ButtonRelease-1>", self.on_left_button_release)
 
         # Right side - Transcription display
         transcription_frame = ctk.CTkFrame(main_frame, corner_radius=10)
@@ -339,10 +510,11 @@ class App(ctk.CTk):
         self.export_page_btn = ctk.CTkButton(bottom_right_frame, image=self.icon_exportnext, text="Export & Next (R)", compound="left", command=self.export_and_next, width=160, font=("Arial", 12))
         self.export_page_btn.pack(side="right", padx=5)
 
-        # Tooltips (simple implementation)
+        # Tooltips
         self.add_tooltip(self.menu_new_btn, "Start a new project")
         self.add_tooltip(self.menu_open_btn, "Open an existing project")
         self.add_tooltip(self.menu_save_btn, "Save the current project")
+        self.add_tooltip(self.menu_add_pdfs_btn, "Add more PDFs to the current project")
         self.add_tooltip(self.menu_exit_btn, "Exit the application")
         self.add_tooltip(self.remove_last_segment_btn, "Remove the last segment")
         self.add_tooltip(self.split_last_segment_btn, "Split the last segment into sub-segments")
@@ -353,6 +525,7 @@ class App(ctk.CTk):
         self.add_tooltip(self.transcribe_btn, "Transcribe the current segments using AI")
         self.add_tooltip(self.export_only_btn, "Export segments as images")
         self.add_tooltip(self.export_page_btn, "Export segments and go to the next page")
+        self.add_tooltip(self.batch_transcribe_btn, "Transcribe all PDFs that have segments")
 
         self.bind_keybindings()
         self.load_page_image()
@@ -424,6 +597,10 @@ class App(ctk.CTk):
             return
 
         pdf_path = self.pdf_manager.get_current_pdf_path()
+        if pdf_path is None:
+            messagebox.showwarning("Warning", "No PDF path available.")
+            return
+            
         pdf_hash = compute_pdf_hash(pdf_path)
         pdf_page_number = self.pdf_manager.get_current_page_index() + 1
 
@@ -508,11 +685,6 @@ class App(ctk.CTk):
         pdf_page_idx = self.pdf_manager.get_current_page_index() + 1
         pdf_page_count = self.pdf_manager.get_pdf_page_count()
 
-        if pdf_name is None:
-            self.pdf_name_label.configure(text="PDF: None")
-        else:
-            self.pdf_name_label.configure(text=f"PDF: {pdf_name}")
-
         self.page_number_label.configure(text=f"Page: {pdf_page_idx}/{pdf_page_count}")
 
         if self.current_scan_page_number is not None:
@@ -522,6 +694,10 @@ class App(ctk.CTk):
 
         self.mode_label.configure(text=f"Mode: {self.current_mode}")
         self.segment_input_mode_label.configure(text=f"Segment Input: {self.segment_input_mode}")
+        
+        # Update PDF selector to show current PDF
+        if pdf_name and self.pdf_var.get() != pdf_name:
+            self.pdf_var.set(pdf_name)
 
     def draw_segments(self):
         for seg in self.segment_manager.get_segments():
@@ -867,10 +1043,16 @@ class App(ctk.CTk):
             messagebox.showwarning("Warning", "No segments to export.")
             return
 
+        # Use project-specific segments folder
+        segments_dir = os.path.join(self.project_manager.project_path, "segments")
+        os.makedirs(segments_dir, exist_ok=True)
+        current_page = self.pdf_manager.get_current_page_index() + 1
+        page_segments_dir = os.path.join(segments_dir, f"{base_name}_page_{current_page}")
+        os.makedirs(page_segments_dir, exist_ok=True)
+
         for seg in segments:
-            sp_num = seg['scan_page']
-            out_name = f"{base_name}_page{sp_num}_segment{seg['id']}.png"
-            out_path = os.path.join(EXPORT_DIR, out_name)
+            out_name = f"segment_{seg['id']}.png"
+            out_path = os.path.join(page_segments_dir, out_name)
             self.export_segment(seg['original_points'], out_path)
 
         self.save_current_page_to_storage()
@@ -888,10 +1070,16 @@ class App(ctk.CTk):
             messagebox.showwarning("Warning", "No segments to export.")
             return
 
+        # Use project-specific segments folder
+        segments_dir = os.path.join(self.project_manager.project_path, "segments")
+        os.makedirs(segments_dir, exist_ok=True)
+        current_page = self.pdf_manager.get_current_page_index() + 1
+        page_segments_dir = os.path.join(segments_dir, f"{base_name}_page_{current_page}")
+        os.makedirs(page_segments_dir, exist_ok=True)
+
         for seg in segments:
-            sp_num = seg['scan_page']
-            out_name = f"{base_name}_page{sp_num}_segment{seg['id']}.png"
-            out_path = os.path.join(EXPORT_DIR, out_name)
+            out_name = f"segment_{seg['id']}.png"
+            out_path = os.path.join(page_segments_dir, out_name)
             self.export_segment(seg['original_points'], out_path)
 
         self.save_current_page_to_storage()
@@ -979,6 +1167,7 @@ class App(ctk.CTk):
         self.rotate_image(angle_increment)
 
     def save_current_page_to_storage(self):
+        from utils.file_utils import load_project_data, save_project_data
         pdf_path = self.pdf_manager.get_current_pdf_path()
         if pdf_path is None:
             return
@@ -1015,7 +1204,11 @@ class App(ctk.CTk):
         pdf_entry["pages"][str(page_number)] = page_entry
 
         self.storage_data["pdfs"][pdf_hash] = pdf_entry
-        save_storage(self.storage_data)
+        
+        # Update the project data with the new storage data
+        project_data = load_project_data(self.project_manager.project_path)
+        project_data["segments"] = self.storage_data
+        save_project_data(self.project_manager.project_path, project_data)
 
     def menu_new_project(self):
         if messagebox.askyesno("New Project", "Are you sure you want to start a new project? Unsaved changes will be lost."):
@@ -1033,8 +1226,9 @@ class App(ctk.CTk):
 
     def menu_save_project(self):
         if self.project_manager:
+            self.save_current_page_to_storage()  # Save segments and rotation
             self.project_manager.save_project()
-            messagebox.showinfo("Save Project", "Project saved successfully.")
+            messagebox.showinfo("Save Project", "Project and segments saved successfully.")
 
     def transcribe_segments(self):
         """Transcribe the current page's segments and display the results."""
@@ -1047,8 +1241,19 @@ class App(ctk.CTk):
             messagebox.showwarning("Warning", "No segments to transcribe.")
             return
 
-        temp_dir = os.path.join(self.project_manager.project_path, "temp_segments")
-        os.makedirs(temp_dir, exist_ok=True)
+        # Save segments to the project's segments folder (same as export)
+        pdfname = os.path.splitext(os.path.basename(self.pdf_manager.get_current_pdf_path()))[0]
+        current_page = self.pdf_manager.get_current_page_index() + 1
+        segments_dir = os.path.join(self.project_manager.project_path, "segments")
+        os.makedirs(segments_dir, exist_ok=True)
+        page_segments_dir = os.path.join(segments_dir, f"{pdfname}_page_{current_page}")
+        os.makedirs(page_segments_dir, exist_ok=True)
+
+        segment_images = []
+        for i, segment in enumerate(segments):
+            img_path = os.path.join(page_segments_dir, f"segment_{segment['id']}.png")
+            self.export_segment(segment["original_points"], img_path)
+            segment_images.append(img_path)
 
         # Show loading bar in place of text
         self.transcription_text.pack_forget()
@@ -1060,17 +1265,7 @@ class App(ctk.CTk):
 
         def do_transcription():
             try:
-                segment_images = []
-                for i, segment in enumerate(segments):
-                    points = self.get_rotated_points(segment["original_points"])
-                    img_path = os.path.join(temp_dir, f"segment_{i}.png")
-                    self.export_segment(points, img_path)
-                    segment_images.append(img_path)
-
-                pdfname = os.path.splitext(os.path.basename(self.pdf_manager.get_current_pdf_path()))[0]
-                current_page = self.pdf_manager.get_current_page_index() + 1
                 messages = self.build_prompt_context(pdfname, current_page, segment_images)
-
                 transcript = self.call_api(messages)
 
                 transcript_dir = os.path.join(self.project_manager.project_path, "transcripts")
@@ -1095,11 +1290,6 @@ class App(ctk.CTk):
                     self.transcription_text.pack(side="left", fill="both", expand=True, padx=2, pady=2)
                     messagebox.showerror("Error", f"Transcription failed: {str(e)}")
                 self.after(0, on_error)
-            finally:
-                if os.path.exists(temp_dir):
-                    for file in os.listdir(temp_dir):
-                        os.remove(os.path.join(temp_dir, file))
-                    os.rmdir(temp_dir)
 
         threading.Thread(target=do_transcription, daemon=True).start()
 
@@ -1149,12 +1339,12 @@ class App(ctk.CTk):
         for img_path in segment_images:
             with open(img_path, "rb") as img_file:
                 base64_str = base64.b64encode(img_file.read()).decode("utf-8")
-            image_items.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/png;base64,{base64_str}"
-                }
-            })
+                image_items.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{base64_str}"
+                    }
+                })
 
         # Build messages
         system_msg = {
@@ -1163,8 +1353,8 @@ class App(ctk.CTk):
                 "You are a helpful assistant tasked with transcribing historical documents. "
                 "You must accurately extract all textual content from the provided image segments. "
                 "These images are scans of historical documents and may contain faded ink, unusual fonts, or damage. "
-                "Use the provided previous pages' transcripts as context if it helps you interpret unclear text. "
-                "However, DO NOT HALLUCINATE. If something is unreadable, mark it as [unreadable]. "
+            "Use the provided previous pages' transcripts as context if it helps you interpret unclear text. "
+            "However, DO NOT HALLUCINATE. If something is unreadable, mark it as [unreadable]. "
                 "Preserve line breaks if meaningful. "
                 "DO NOT ADD EXTRANEOUS COMMENTARY, ONLY OUTPUT THE RAW TRANSCRIPTION TEXT. "
                 "Do not add page headers in your final output. Your goal: produce the most accurate transcription."
@@ -1217,3 +1407,248 @@ class App(ctk.CTk):
         if not choices:
             raise RuntimeError("No choices returned from API.")
         return choices[0]["message"]["content"].strip()
+
+    def update_pdf_selector(self):
+        """Update the PDF selector dropdown with current PDFs."""
+        pdfs = self.project_manager.get_all_pdfs()
+        pdf_names = [os.path.basename(pdf) for pdf in pdfs]
+        
+        if pdf_names:
+            self.pdf_combobox.configure(values=pdf_names)
+            if not self.pdf_var.get() or self.pdf_var.get() not in pdf_names:
+                self.pdf_var.set(pdf_names[0])
+        else:
+            self.pdf_combobox.configure(values=["No PDFs"])
+            self.pdf_var.set("No PDFs")
+
+    def on_pdf_selected(self, pdf_name):
+        """Handle PDF selection from dropdown."""
+        if pdf_name == "No PDFs":
+            return
+            
+        pdfs = self.project_manager.get_all_pdfs()
+        pdf_names = [os.path.basename(pdf) for pdf in pdfs]
+        
+        if pdf_name in pdf_names:
+            index = pdf_names.index(pdf_name)
+            self.pdf_manager.current_pdf_index = index
+            self.pdf_manager.load_pdf(pdfs[index])
+            self.segment_manager.clear()
+            self.current_scan_page_number = None
+            self.rotation_angle = 0.0
+            self.update_rotation_scale()
+            self.load_page_image()
+
+    def add_pdfs_to_project(self):
+        """Add new PDFs to the current project."""
+        pdf_files = fd.askopenfilenames(title="Select PDF Files to Add", filetypes=[("PDF Files", "*.pdf")], parent=self)
+        if pdf_files:
+            if self.project_manager.add_pdfs_to_project(pdf_files):
+                # Update PDF manager with new PDFs
+                project_pdfs = self.project_manager.get_all_pdfs()
+                self.pdf_manager.pdf_files = project_pdfs
+                self.update_pdf_selector()
+                messagebox.showinfo("Success", f"Added {len(pdf_files)} PDF(s) to the project.")
+            else:
+                messagebox.showerror("Error", "Failed to add PDFs to project.")
+
+    def batch_transcribe_all(self):
+        """Transcribe all PDFs that have segments."""
+        segmented_pdfs = self.project_manager.get_segmented_pdfs()
+        if not segmented_pdfs:
+            messagebox.showwarning("Warning", "No PDFs with segments found.")
+            return
+            
+        if not messagebox.askyesno("Batch Transcription", f"Transcribe all {len(segmented_pdfs)} PDF(s) with segments?"):
+            return
+            
+        # Show progress dialog
+        progress_window = ctk.CTkToplevel(self)
+        progress_window.title("Batch Transcription Progress")
+        progress_window.geometry("400x200")
+        progress_window.transient(self)
+        progress_window.grab_set()
+        
+        progress_label = ctk.CTkLabel(progress_window, text="Transcribing PDFs...", font=("Arial", 14, "bold"))
+        progress_label.pack(pady=20)
+        
+        progress_bar = ctk.CTkProgressBar(progress_window, width=300, height=20)
+        progress_bar.pack(pady=10)
+        progress_bar.set(0)
+        
+        status_label = ctk.CTkLabel(progress_window, text="", font=("Arial", 12))
+        status_label.pack(pady=10)
+        
+        def do_batch_transcription():
+            try:
+                total_pdfs = len(segmented_pdfs)
+                for i, pdf_name in enumerate(segmented_pdfs):
+                    def update_progress():
+                        progress_bar.set((i + 1) / total_pdfs)
+                        status_label.configure(text=f"Processing: {pdf_name}")
+                        progress_window.update()
+                    
+                    self.after(0, update_progress)
+                    
+                    # Process this PDF's segments
+                    pdf_path = os.path.join(self.project_manager.project_path, "pdfs", pdf_name)
+                    self.transcribe_pdf_segments(pdf_path, pdf_name)
+                
+                def on_complete():
+                    progress_window.destroy()
+                    messagebox.showinfo("Complete", f"Batch transcription completed for {total_pdfs} PDF(s).")
+                
+                self.after(0, on_complete)
+                
+            except Exception as e:
+                def on_error():
+                    progress_window.destroy()
+                    messagebox.showerror("Error", f"Batch transcription failed: {str(e)}")
+                self.after(0, on_error)
+        
+        threading.Thread(target=do_batch_transcription, daemon=True).start()
+
+    def transcribe_pdf_segments(self, pdf_path, pdf_name):
+        """Transcribe all segments for a specific PDF."""
+        pdf_hash = compute_pdf_hash(pdf_path)
+        if pdf_hash in self.storage_data.get("pdfs", {}):
+            pdf_entry = self.storage_data["pdfs"][pdf_hash]
+            # Process each page with segments
+            for page_num, page_data in pdf_entry.get("pages", {}).items():
+                scan_pages = page_data.get("scan_pages", [])
+                for scan_page in scan_pages:
+                    segments = scan_page.get("segments", [])
+                    if not segments:
+                        continue
+                    # Save segments to the project's segments folder
+                    segments_dir = os.path.join(self.project_manager.project_path, "segments")
+                    os.makedirs(segments_dir, exist_ok=True)
+                    page_segments_dir = os.path.join(segments_dir, f"{pdf_name}_page_{page_num}")
+                    os.makedirs(page_segments_dir, exist_ok=True)
+                    try:
+                        # Load the PDF page
+                        doc = fitz.open(pdf_path)
+                        page = doc.load_page(int(page_num) - 1)  # Convert to 0-based index
+                        # Get page image
+                        zoom_x = 4.0
+                        zoom_y = 4.0
+                        mat = fitz.Matrix(zoom_x, zoom_y)
+                        pix = page.get_pixmap(matrix=mat)
+                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                        # Apply rotation if needed
+                        rotation_angle = page_data.get("rotation_angle", 0.0)
+                        if rotation_angle != 0:
+                            img = img.rotate(-rotation_angle, expand=True)
+                        # Export segments
+                        segment_images = []
+                        for i, segment in enumerate(segments):
+                            points = segment.get("original_points", [])
+                            if len(points) == 4:
+                                img_path = os.path.join(page_segments_dir, f"segment_{segment['id']}.png")
+                                self.export_segment_from_points(points, img, img_path, rotation_angle)
+                                segment_images.append(img_path)
+                        if segment_images:
+                            # Transcribe segments
+                            messages = self.build_prompt_context(pdf_name, int(page_num), segment_images)
+                            transcript = self.call_api(messages)
+                            # Save transcript
+                            transcript_dir = os.path.join(self.project_manager.project_path, "transcripts")
+                            os.makedirs(transcript_dir, exist_ok=True)
+                            transcript_file = os.path.join(transcript_dir, f"{pdf_name}.txt")
+                            with open(transcript_file, "a", encoding="utf-8") as f:
+                                f.write(f"PAGE {page_num}\n")
+                                f.write(transcript.strip() + "\n\n")
+                        doc.close()
+                    except Exception as e:
+                        print(f"Error processing {pdf_name} page {page_num}: {str(e)}")
+
+    def export_segment_from_points(self, points, image, out_path, rotation_angle=0.0):
+        """Export a segment from points and image (for batch processing)."""
+        if len(points) != 4:
+            return False
+            
+        # Apply rotation transformation to the points
+        # Since this function is used for batch processing, we need to apply rotation manually
+        # The image is already rotated, so we need to transform the points to match
+        
+        # Apply rotation transformation to points
+        if rotation_angle != 0:
+            # Calculate center of original image
+            orig_w, orig_h = image.size
+            orig_cx, orig_cy = orig_w / 2, orig_h / 2
+            
+            # Calculate center of rotated image
+            rotated_w, rotated_h = image.size  # Image is already rotated
+            new_cx, new_cy = rotated_w / 2, rotated_h / 2
+            
+            theta = math.radians(rotation_angle)
+            cos_theta = math.cos(theta)
+            sin_theta = math.sin(theta)
+            
+            rotated_points = []
+            for (x, y) in points:
+                x_shifted = x - orig_cx
+                y_shifted = y - orig_cy
+                x_rot = x_shifted * cos_theta - y_shifted * sin_theta
+                y_rot = x_shifted * sin_theta + y_shifted * cos_theta
+                x_new = x_rot + new_cx
+                y_new = y_rot + new_cy
+                rotated_points.append([x_new, y_new])
+            
+            points = rotated_points
+            
+        # Convert points to numpy array
+        pts = np.array(points, dtype="float32")
+        
+        # Order points (top-left, top-right, bottom-right, bottom-left)
+        y_sorted = pts[np.argsort(pts[:,1]), :]
+        top = y_sorted[:2, :]
+        bottom = y_sorted[2:, :]
+        top = top[np.argsort(top[:,0]), :]
+        bottom = bottom[np.argsort(bottom[:,0]), :]
+        ordered = [top[0], top[1], bottom[1], bottom[0]]
+        
+        (tl, tr, br, bl) = ordered
+        
+        def dist(a, b):
+            return math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
+        
+        widthA = dist(br, bl)
+        widthB = dist(tr, tl)
+        maxWidth = int(max(widthA, widthB))
+        
+        heightA = dist(tr, br)
+        heightB = dist(tl, bl)
+        maxHeight = int(max(heightA, heightB))
+        
+        src = np.array([tl, tr, br, bl], dtype=np.float32)
+        dst = np.array([
+            [0, 0],
+            [maxWidth-1, 0],
+            [maxWidth-1, maxHeight-1],
+            [0, maxHeight-1]
+        ], dtype=np.float32)
+        
+        M = cv2.getPerspectiveTransform(src, dst)
+        cv_img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        warped = cv2.warpPerspective(cv_img, M, (maxWidth, maxHeight))
+        cv2.imwrite(out_path, warped)
+        return True
+
+    def refresh_pdf_list(self):
+        """Refresh the PDF list from the project manager."""
+        project_pdfs = self.project_manager.get_all_pdfs()
+        self.pdf_manager.pdf_files = project_pdfs
+        self.update_pdf_selector()
+        
+        # If current PDF is no longer in the list, switch to first available
+        current_pdf_name = self.pdf_manager.get_current_pdf_name()
+        pdf_names = [os.path.basename(pdf) for pdf in project_pdfs]
+        if current_pdf_name not in pdf_names and pdf_names:
+            self.pdf_manager.current_pdf_index = 0
+            self.pdf_manager.load_pdf(project_pdfs[0])
+            self.segment_manager.clear()
+            self.current_scan_page_number = None
+            self.rotation_angle = 0.0
+            self.update_rotation_scale()
+            self.load_page_image()
