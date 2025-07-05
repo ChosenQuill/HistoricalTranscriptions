@@ -84,12 +84,3 @@ def save_storage(data):
     print("Warning: Using global segments.json. Consider migrating to project-specific storage.")
     with open(global_segments_file, 'w') as f:
         json.dump(data, f, indent=4)
-    try:
-        
-        if "segment_data" in project_data:
-        # Save the updated project.json
-            json.dump(project_data, f, indent=2)
-        
-        return True
-    except Exception as e:
-        return False
